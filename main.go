@@ -36,15 +36,15 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type parameters struct {
-		Body string `json: "body"`
+		Body string `json:"body"`
 	}
 
 	type errResp struct {
-		Error string `json: "error"`
+		Error string `json:"error"`
 	}
 
 	type validResp struct {
-		Valid bool `json: "valid"`
+		Valid bool `json:"valid"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
