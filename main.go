@@ -5,11 +5,45 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+}
+
+type parameters struct {
+	Body string `json:"body"`
+}
+
+type errResp struct {
+	Error string `json:"error"`
+}
+
+type validResp struct {
+	Valid bool `json:"valid"`
+}
+
+type cleanResp struct {
+	Cleaned_Body string `json:"cleaned_body"`
+}
+
+func profanityFilter(b parameters) cleanResp {
+	msg := b.Body
+	words := strings.Split(msg, " ")
+	badWords := map[string]struct{}{"kerfuffle": {}, "sharbert": {}, "fornax": {}}
+	for i, word := range words {
+		if _, ok := badWords[strings.ToLower(word)]; ok {
+			words[i] = "****"
+		}
+	}
+	filteredSentence := strings.Join(words, " ")
+
+	fltRsp := cleanResp{
+		filteredSentence,
+	}
+	return fltRsp
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -35,33 +69,26 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid method", http.StatusBadRequest)
 	}
 
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	type errResp struct {
-		Error string `json:"error"`
-	}
-
-	type validResp struct {
-		Valid bool `json:"valid"`
-	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
+
 	err := decoder.Decode(&params)
 	if err != nil {
 		respBody := errResp{
 			Error: fmt.Sprintf("%v", err),
 		}
+
 		dat, err := json.Marshal(respBody)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(400)
 		w.Write(dat)
+
 		return
 	}
 
@@ -69,27 +96,34 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 		respBody := errResp{
 			Error: "Chirp is too long",
 		}
+
 		dat, err := json.Marshal(respBody)
 		if err != nil {
 			log.Printf("Error marshalling JSON: %s", err)
 			w.WriteHeader(500)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(400)
 		w.Write(dat)
+
 		return
 
 	}
-	respBody := validResp{
-		Valid: true,
-	}
+
+	//respBody := validResp{
+	//Valid: true,
+	//}
+
+	respBody := profanityFilter(params)
 	dat, err := json.Marshal(respBody)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(dat)
