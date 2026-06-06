@@ -1,16 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
+	"github.com/matthewmoodley048/chirpy/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	queries        *database.Queries
 }
 
 type parameters struct {
@@ -130,7 +137,13 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	apiCfg := &apiConfig{}
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+
+	dbQueries := database.New(db)
+
+	apiCfg := &apiConfig{queries: dbQueries}
 	mux := http.NewServeMux()
 
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
@@ -155,7 +168,7 @@ func main() {
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	err := s.ListenAndServe()
+	err = s.ListenAndServe()
 	if err != nil {
 		fmt.Errorf("%v", err)
 	}
