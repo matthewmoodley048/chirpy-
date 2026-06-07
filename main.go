@@ -53,6 +53,17 @@ func profanityFilter(b parameters) cleanResp {
 	return fltRsp
 }
 
+func writeJSONResp(dat []byte, code int, w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(dat)
+}
+
+func errJSONResp(err error, code int, w http.ResponseWriter) {
+	log.Printf("Error marshalling JSON: %s", err)
+	w.WriteHeader(code)
+}
+
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
@@ -63,7 +74,11 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("<html><body><h1>Welcome, Chirpy Admin</h1>    <p>Chirpy has been visited %d times!</p>  </body></html>", cfg.fileserverHits.Load())))
+	rsp, e := w.Write([]byte(fmt.Sprintf("<html><body><h1>Welcome, Chirpy Admin</h1>    <p>Chirpy has been visited %d times!</p>  </body></html>", cfg.fileserverHits.Load())))
+	if e != nil {
+		errJSONResp(e, rsp, w)
+		return
+	}
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +89,7 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "" || r.Method == http.MethodGet {
 		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -87,15 +103,11 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 
 		dat, err := json.Marshal(respBody)
 		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
+			errJSONResp(err, 500, w)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
-		w.Write(dat)
-
+		writeJSONResp(dat, 400, w)
 		return
 	}
 
@@ -106,17 +118,12 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 
 		dat, err := json.Marshal(respBody)
 		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
+			errJSONResp(err, 500, w)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
-		w.Write(dat)
-
+		writeJSONResp(dat, 400, w)
 		return
-
 	}
 
 	//respBody := validResp{
@@ -124,16 +131,14 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 	//}
 
 	respBody := profanityFilter(params)
+
 	dat, err := json.Marshal(respBody)
 	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
+		errJSONResp(err, 500, w)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(dat)
+	writeJSONResp(dat, http.StatusOK, w)
 }
 
 func main() {
