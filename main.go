@@ -9,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/matthewmoodley048/chirpy/internal/database"
@@ -18,10 +20,21 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
+	platform       string
+}
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 type parameters struct {
 	Body string `json:"body"`
+}
+
+type emailReq struct {
+	Email string `json:"email"`
 }
 
 type errResp struct {
@@ -82,8 +95,60 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(403)
+	}
 	cfg.fileserverHits.Store(0)
+	err := cfg.queries.DeleteAllUsers(r.Context())
+	if err != nil {
+		errJSONResp(err, 500, w)
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "" || r.Method == http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := emailReq{}
+
+	err := decoder.Decode(&params)
+	if err != nil {
+		respBody := errResp{
+			Error: fmt.Sprintf("%v", err),
+		}
+
+		dat, err := json.Marshal(respBody)
+		if err != nil {
+			errJSONResp(err, 500, w)
+			return
+		}
+
+		writeJSONResp(dat, 400, w)
+		return
+	}
+
+	rsp, err := cfg.queries.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		http.Error(w, "failed to create user", 500)
+	}
+
+	createdUser := User{
+		ID:        rsp.ID,
+		CreatedAt: rsp.CreatedAt,
+		UpdatedAt: rsp.UpdatedAt,
+		Email:     rsp.Email,
+	}
+
+	dat, err := json.Marshal(createdUser)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, 201, w)
 }
 
 func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
@@ -144,16 +209,22 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		_ = fmt.Errorf("%v", err)
+	}
 
 	dbQueries := database.New(db)
 
-	apiCfg := &apiConfig{queries: dbQueries}
+	apiCfg := &apiConfig{queries: dbQueries, platform: platform}
 	mux := http.NewServeMux()
 
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(stripedRoot))
 
+	mux.HandleFunc("POST /api/validate_chirp", apiCfg.handlerValidate)
+	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
 			http.NotFound(w, req)
@@ -162,9 +233,8 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		body := "OK"
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	})
-	mux.HandleFunc("POST /api/validate_chirp", apiCfg.handlerValidate)
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
@@ -175,6 +245,6 @@ func main() {
 	}
 	err = s.ListenAndServe()
 	if err != nil {
-		fmt.Errorf("%v", err)
+		_ = fmt.Errorf("%v", err)
 	}
 }
