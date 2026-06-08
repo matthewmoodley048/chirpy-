@@ -42,6 +42,10 @@ type parameters struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
+type listChirpResp struct {
+	Body []Chirp `json:"body"`
+}
+
 type emailReq struct {
 	Email string `json:"email"`
 }
@@ -80,6 +84,20 @@ func writeJSONResp(dat []byte, code int, w http.ResponseWriter) {
 func errJSONResp(err error, code int, w http.ResponseWriter) {
 	log.Printf("Error marshalling JSON: %s", err)
 	w.WriteHeader(code)
+}
+
+func expErrJSONResp(code int, w http.ResponseWriter, customErrMsg string) {
+	respBody := errResp{
+		Error: customErrMsg,
+	}
+
+	dat, err := json.Marshal(respBody)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, code, w)
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -121,17 +139,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
 	err := decoder.Decode(&params)
 	if err != nil {
-		respBody := errResp{
-			Error: fmt.Sprintf("%v", err),
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			errJSONResp(err, 500, w)
-			return
-		}
-
-		writeJSONResp(dat, 400, w)
+		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
 		return
 	}
 
@@ -156,7 +164,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	writeJSONResp(dat, 201, w)
 }
 
-func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "" || r.Method == http.MethodGet {
 		http.Error(w, "invalid method", http.StatusBadRequest)
 		return
@@ -167,51 +175,19 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 
 	err := decoder.Decode(&params)
 	if err != nil {
-		respBody := errResp{
-			Error: fmt.Sprintf("%v", err),
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			errJSONResp(err, 500, w)
-			return
-		}
-
-		writeJSONResp(dat, 400, w)
+		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
 		return
 	}
 
 	if len(params.Body) > 140 {
-		respBody := errResp{
-			Error: "Chirp is too long",
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			errJSONResp(err, 500, w)
-			return
-		}
-
-		writeJSONResp(dat, 400, w)
+		expErrJSONResp(400, w, "Chirp is too long")
 		return
 	}
 
 	if len(params.UserID) <= 0 {
-		respBody := errResp{
-			Error: "No user specified",
-		}
-
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			errJSONResp(err, 500, w)
-			return
-		}
-
-		writeJSONResp(dat, 400, w)
+		expErrJSONResp(400, w, "No user specified")
 		return
-	} // respBody := validResp{
-	//Valid: true,
-	//}
+	}
 
 	cleanBody := profanityFilter(params)
 
@@ -242,6 +218,39 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 	writeJSONResp(dat, http.StatusCreated, w)
 }
 
+func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+
+	data, e := cfg.queries.GetAllChirps(r.Context())
+	if e != nil {
+		errJSONResp(e, 500, w)
+		return
+	}
+
+	chirps := []Chirp{}
+
+	for _, chirp := range data {
+		chirps = append(chirps, Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
+	}
+
+	rsp, err := json.Marshal(chirps)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(rsp, http.StatusOK, w)
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -259,7 +268,8 @@ func main() {
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(stripedRoot))
 
-	mux.HandleFunc("POST /api/chirps", apiCfg.handlerValidate)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
