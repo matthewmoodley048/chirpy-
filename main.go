@@ -29,8 +29,17 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 type parameters struct {
-	Body string `json:"body"`
+	Body   string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
 }
 
 type emailReq struct {
@@ -39,10 +48,6 @@ type emailReq struct {
 
 type errResp struct {
 	Error string `json:"error"`
-}
-
-type validResp struct {
-	Valid bool `json:"valid"`
 }
 
 type cleanResp struct {
@@ -60,10 +65,10 @@ func profanityFilter(b parameters) cleanResp {
 	}
 	filteredSentence := strings.Join(words, " ")
 
-	fltRsp := cleanResp{
+	cleanRsp := cleanResp{
 		filteredSentence,
 	}
-	return fltRsp
+	return cleanRsp
 }
 
 func writeJSONResp(dat []byte, code int, w http.ResponseWriter) {
@@ -191,19 +196,50 @@ func (cfg *apiConfig) handlerValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//respBody := validResp{
+	if len(params.UserID) <= 0 {
+		respBody := errResp{
+			Error: "No user specified",
+		}
+
+		dat, err := json.Marshal(respBody)
+		if err != nil {
+			errJSONResp(err, 500, w)
+			return
+		}
+
+		writeJSONResp(dat, 400, w)
+		return
+	} // respBody := validResp{
 	//Valid: true,
 	//}
 
-	respBody := profanityFilter(params)
+	cleanBody := profanityFilter(params)
 
-	dat, err := json.Marshal(respBody)
+	createParams := database.CreateChirpParams{
+		Body:   cleanBody.Cleaned_Body,
+		UserID: params.UserID,
+	}
+
+	dbRsp, e := cfg.queries.CreateChirp(r.Context(), createParams)
+	if e != nil {
+		errJSONResp(e, 500, w)
+		return
+	}
+	created := Chirp{
+		ID:        dbRsp.ID,
+		CreatedAt: dbRsp.CreatedAt,
+		UpdatedAt: dbRsp.UpdatedAt,
+		Body:      dbRsp.Body,
+		UserID:    dbRsp.UserID,
+	}
+
+	dat, err := json.Marshal(created)
 	if err != nil {
 		errJSONResp(err, 500, w)
 		return
 	}
 
-	writeJSONResp(dat, http.StatusOK, w)
+	writeJSONResp(dat, http.StatusCreated, w)
 }
 
 func main() {
@@ -223,7 +259,7 @@ func main() {
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(stripedRoot))
 
-	mux.HandleFunc("POST /api/validate_chirp", apiCfg.handlerValidate)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerValidate)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
