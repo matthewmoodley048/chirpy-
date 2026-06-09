@@ -218,6 +218,42 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	writeJSONResp(dat, http.StatusCreated, w)
 }
 
+func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		errJSONResp(err, http.StatusBadRequest, w)
+	}
+	chirp, e := cfg.queries.GetChirp(r.Context(), chirpID)
+	if e == sql.ErrNoRows {
+		expErrJSONResp(404, w, "chirp not found")
+		return
+	}
+	if e != nil {
+		errJSONResp(e, 500, w)
+		return
+	}
+
+	body := Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+
+	rsp, err := json.Marshal(body)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(rsp, http.StatusOK, w)
+}
+
 func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "invalid method", http.StatusBadRequest)
@@ -270,6 +306,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
