@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/matthewmoodley048/chirpy/internal/auth"
 	"github.com/matthewmoodley048/chirpy/internal/database"
 )
 
@@ -46,8 +47,9 @@ type listChirpResp struct {
 	Body []Chirp `json:"body"`
 }
 
-type emailReq struct {
-	Email string `json:"email"`
+type userReq struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type errResp struct {
@@ -135,7 +137,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	decoder := json.NewDecoder(r.Body)
-	params := emailReq{}
+	params := userReq{}
 
 	err := decoder.Decode(&params)
 	if err != nil {
@@ -143,7 +145,19 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rsp, err := cfg.queries.CreateUser(r.Context(), params.Email)
+	hashedPassword, e := auth.HashPassword(params.Password)
+
+	if e != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", e))
+		return
+	}
+
+	arg := database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+	}
+
+	rsp, err := cfg.queries.CreateUser(r.Context(), arg)
 	if err != nil {
 		http.Error(w, "failed to create user", 500)
 	}
@@ -162,6 +176,57 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSONResp(dat, 201, w)
+}
+
+func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := userReq{}
+
+	err := decoder.Decode(&params)
+	if err != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	dbResult, err := cfg.queries.FetchUser(r.Context(), params.Email)
+
+	if err == sql.ErrNoRows {
+		errJSONResp(err, http.StatusUnauthorized, w)
+	} else if err != nil {
+		errJSONResp(err, 500, w)
+	}
+
+	validMatch, e := auth.CheckPasswordHash(params.Password, dbResult.HashedPassword)
+
+	if e != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", e))
+		return
+	}
+
+	if !validMatch {
+		errJSONResp(err, http.StatusUnauthorized, w)
+		return
+	}
+
+	validUser := User{
+		ID:        dbResult.ID,
+		CreatedAt: dbResult.CreatedAt,
+		UpdatedAt: dbResult.UpdatedAt,
+		Email:     dbResult.Email,
+	}
+
+	dat, err := json.Marshal(validUser)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, http.StatusOK, w)
 }
 
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +373,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
 			http.NotFound(w, req)
