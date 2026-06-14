@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	auth           string
 }
 type User struct {
 	ID        uuid.UUID `json:"id"`
@@ -43,13 +44,18 @@ type parameters struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
-type listChirpResp struct {
-	Body []Chirp `json:"body"`
-}
-
 type userReq struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Expires  *int   `json:"expires_in_seconds"`
+}
+
+type userRsp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type errResp struct {
@@ -186,6 +192,7 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(r.Body)
 	params := userReq{}
+	expiry := time.Hour
 
 	err := decoder.Decode(&params)
 	if err != nil {
@@ -213,11 +220,22 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validUser := User{
+	if params.Expires != nil {
+		paramExp := time.Duration(*params.Expires) * time.Second
+		if paramExp < expiry {
+			expiry = paramExp
+		}
+	}
+	newToken, err := auth.MakeJWT(dbResult.ID, cfg.auth, expiry)
+	if err != nil {
+		errJSONResp(err, 500, w)
+	}
+	validUser := userRsp{
 		ID:        dbResult.ID,
 		CreatedAt: dbResult.CreatedAt,
 		UpdatedAt: dbResult.UpdatedAt,
 		Email:     dbResult.Email,
+		Token:     newToken,
 	}
 
 	dat, err := json.Marshal(validUser)
@@ -244,12 +262,23 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		expErrJSONResp(http.StatusUnauthorized, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.auth)
+	if err != nil {
+		expErrJSONResp(http.StatusUnauthorized, w, fmt.Sprintf("%v", err))
+		return
+	}
 	if len(params.Body) > 140 {
 		expErrJSONResp(400, w, "Chirp is too long")
 		return
 	}
 
-	if len(params.UserID) <= 0 {
+	if len(userID) <= 0 {
 		expErrJSONResp(400, w, "No user specified")
 		return
 	}
@@ -258,7 +287,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 
 	createParams := database.CreateChirpParams{
 		Body:   cleanBody.Cleaned_Body,
-		UserID: params.UserID,
+		UserID: userID,
 	}
 
 	dbRsp, e := cfg.queries.CreateChirp(r.Context(), createParams)
@@ -356,6 +385,7 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	auth := os.Getenv("JWT")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		_ = fmt.Errorf("%v", err)
@@ -363,7 +393,7 @@ func main() {
 
 	dbQueries := database.New(db)
 
-	apiCfg := &apiConfig{queries: dbQueries, platform: platform}
+	apiCfg := &apiConfig{queries: dbQueries, platform: platform, auth: auth}
 	mux := http.NewServeMux()
 
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
