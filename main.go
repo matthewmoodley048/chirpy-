@@ -455,6 +455,51 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	writeJSONResp(dat, http.StatusCreated, w)
 }
 
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errJSONResp(err, 401, w)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(authToken, cfg.auth)
+	if err != nil {
+		errJSONResp(err, 401, w)
+		return
+	}
+
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		errJSONResp(err, http.StatusBadRequest, w)
+	}
+	chirp, err := cfg.queries.GetChirp(r.Context(), chirpID)
+	if err == sql.ErrNoRows {
+		expErrJSONResp(404, w, "chirp not found")
+		return
+	}
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	if chirp.UserID != userID {
+		errJSONResp(err, 403, w)
+		return
+
+	}
+
+	err = cfg.queries.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		errJSONResp(err, 404, w)
+		return
+	}
+	writeJSONResp([]byte{}, 204, w)
+}
+
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "invalid method", http.StatusBadRequest)
@@ -545,6 +590,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
