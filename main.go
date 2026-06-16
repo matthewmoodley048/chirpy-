@@ -25,10 +25,11 @@ type apiConfig struct {
 	auth           string
 }
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -43,12 +44,19 @@ type parameters struct {
 	Body   string    `json:"body"`
 	UserID uuid.UUID `json:"user_id"`
 }
-type authParm struct {
-	Authorization string `json:"Authorization"`
-}
+
 type userReq struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type polkaReq struct {
+	Event string       `json:"event"`
+	Data  polkaReqData `json:"data"`
+}
+
+type polkaReqData struct {
+	UserID uuid.UUID `json:"user_id"`
 }
 
 type userRsp struct {
@@ -58,6 +66,7 @@ type userRsp struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type errResp struct {
@@ -171,10 +180,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	createdUser := User{
-		ID:        rsp.ID,
-		CreatedAt: rsp.CreatedAt,
-		UpdatedAt: rsp.UpdatedAt,
-		Email:     rsp.Email,
+		ID:          rsp.ID,
+		CreatedAt:   rsp.CreatedAt,
+		UpdatedAt:   rsp.UpdatedAt,
+		Email:       rsp.Email,
+		IsChirpyRed: rsp.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(createdUser)
@@ -184,6 +194,58 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSONResp(dat, 201, w)
+}
+
+func (cfg *apiConfig) handlerUpdateUserRedStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := polkaReq{}
+
+	err := decoder.Decode(&params)
+	if err != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		expErrJSONResp(204, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	arg := database.UpdateUserRedStatusParams{
+		IsChirpyRed: true,
+		ID:          params.Data.UserID,
+	}
+
+	rsp, err := cfg.queries.UpdateUserRedStatus(r.Context(), arg)
+	if err != nil {
+		http.Error(w, "failed to update user status", 500)
+	}
+
+	updatedUser := User{
+		ID:          rsp.ID,
+		CreatedAt:   rsp.CreatedAt,
+		UpdatedAt:   rsp.UpdatedAt,
+		Email:       rsp.Email,
+		IsChirpyRed: rsp.IsChirpyRed,
+	}
+
+	dat, err := json.Marshal(updatedUser)
+	if err == sql.ErrNoRows {
+		errJSONResp(err, 404, w)
+		return
+
+	}
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, 204, w)
 }
 
 func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -231,10 +293,11 @@ func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	updatedUser := User{
-		ID:        rsp.ID,
-		CreatedAt: rsp.CreatedAt,
-		UpdatedAt: rsp.UpdatedAt,
-		Email:     rsp.Email,
+		ID:          rsp.ID,
+		CreatedAt:   rsp.CreatedAt,
+		UpdatedAt:   rsp.UpdatedAt,
+		Email:       rsp.Email,
+		IsChirpyRed: rsp.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(updatedUser)
@@ -304,6 +367,7 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		Email:        dbResult.Email,
 		Token:        newToken,
 		RefreshToken: newRefreshToken.Token,
+		IsChirpyRed:  dbResult.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(validUser)
@@ -593,6 +657,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerUpdateUserRedStatus)
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerFetchRefreshToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevokeRefreshToken)
