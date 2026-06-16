@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	polkaKey       string
 	auth           string
 }
 type User struct {
@@ -202,10 +203,21 @@ func (cfg *apiConfig) handlerUpdateUserRedStatus(w http.ResponseWriter, r *http.
 		return
 	}
 
+	key, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		expErrJSONResp(401, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	if key != cfg.polkaKey {
+		expErrJSONResp(401, w, fmt.Sprintf("%v", err))
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	params := polkaReq{}
 
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
 		return
@@ -634,10 +646,11 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request
 }
 
 func main() {
-	godotenv.Load()
+	_ = godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	auth := os.Getenv("JWT")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		_ = fmt.Errorf("%v", err)
@@ -645,7 +658,7 @@ func main() {
 
 	dbQueries := database.New(db)
 
-	apiCfg := &apiConfig{queries: dbQueries, platform: platform, auth: auth}
+	apiCfg := &apiConfig{queries: dbQueries, platform: platform, auth: auth, polkaKey: polkaKey}
 	mux := http.NewServeMux()
 
 	stripedRoot := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
