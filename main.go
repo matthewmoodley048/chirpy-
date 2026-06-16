@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -617,11 +618,30 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid method", http.StatusBadRequest)
 		return
 	}
+	authorID := r.URL.Query().Get("author_id")
+	sortOrder := r.URL.Query().Get("sort")
+	data := []database.Chirp{}
+	hasAuthor := true
 
-	data, e := cfg.queries.GetAllChirps(r.Context())
-	if e != nil {
-		errJSONResp(e, 500, w)
-		return
+	userID, err := uuid.Parse(authorID)
+	if err != nil {
+		hasAuthor = false
+	}
+	if !hasAuthor {
+		d, err := cfg.queries.GetAllChirps(r.Context())
+		if err != nil {
+			errJSONResp(err, 500, w)
+			return
+		}
+		data = d
+	} else {
+
+		d, err := cfg.queries.GetAllUserChirps(r.Context(), userID)
+		if err != nil {
+			errJSONResp(err, 500, w)
+			return
+		}
+		data = d
 	}
 
 	chirps := []Chirp{}
@@ -634,6 +654,10 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request
 			Body:      chirp.Body,
 			UserID:    chirp.UserID,
 		})
+	}
+
+	if sortOrder == "desc" {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt) })
 	}
 
 	rsp, err := json.Marshal(chirps)

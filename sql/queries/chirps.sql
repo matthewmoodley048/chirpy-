@@ -11,7 +11,21 @@ RETURNING *;
 
 -- name: GetAllChirps :many
 SELECT * FROM chirps
+ORDER BY created_at  ASC;
+
+-- name: GetAllChirpsDESC :many
+SELECT * FROM chirps
+ORDER BY created_at  DESC;
+
+-- name: GetAllUserChirps :many
+SELECT * FROM chirps
+WHERE user_id = $1
 ORDER BY created_at ASC;
+
+-- name: GetAllUserChirpsDESC :many
+SELECT * FROM chirps
+WHERE user_id = $1
+ORDER BY created_at DESC;
 
 -- name: GetChirp :one
 SELECT * FROM chirps
