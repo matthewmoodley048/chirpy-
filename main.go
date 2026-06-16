@@ -43,19 +43,21 @@ type parameters struct {
 	Body   string    `json:"body"`
 	UserID uuid.UUID `json:"user_id"`
 }
-
+type authParm struct {
+	Authorization string `json:"Authorization"`
+}
 type userReq struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-	Expires  *int   `json:"expires_in_seconds"`
 }
 
 type userRsp struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type errResp struct {
@@ -220,22 +222,28 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if params.Expires != nil {
-		paramExp := time.Duration(*params.Expires) * time.Second
-		if paramExp < expiry {
-			expiry = paramExp
-		}
-	}
 	newToken, err := auth.MakeJWT(dbResult.ID, cfg.auth, expiry)
 	if err != nil {
 		errJSONResp(err, 500, w)
 	}
+
+	arg := database.CreateRefreshTokenParams{
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+		UserID:    dbResult.ID,
+		Token:     auth.MakeRefreshToken(),
+	}
+	newRefreshToken, err := cfg.queries.CreateRefreshToken(r.Context(), arg)
+	if err != nil {
+		errJSONResp(err, 500, w)
+	}
+
 	validUser := userRsp{
-		ID:        dbResult.ID,
-		CreatedAt: dbResult.CreatedAt,
-		UpdatedAt: dbResult.UpdatedAt,
-		Email:     dbResult.Email,
-		Token:     newToken,
+		ID:           dbResult.ID,
+		CreatedAt:    dbResult.CreatedAt,
+		UpdatedAt:    dbResult.UpdatedAt,
+		Email:        dbResult.Email,
+		Token:        newToken,
+		RefreshToken: newRefreshToken.Token,
 	}
 
 	dat, err := json.Marshal(validUser)
@@ -245,6 +253,81 @@ func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSONResp(dat, http.StatusOK, w)
+}
+
+func (cfg *apiConfig) handlerFetchRefreshToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "" || r.Method == http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errJSONResp(err, 400, w)
+		return
+	}
+
+	dbToken, err := cfg.queries.FetchRefreshToken(r.Context(), refreshToken)
+	if err == sql.ErrNoRows {
+		expErrJSONResp(http.StatusUnauthorized, w, "refresh token not found")
+		return
+	}
+
+	if dbToken.RevokedAt.Valid {
+		expErrJSONResp(http.StatusUnauthorized, w, "session expired")
+		return
+	}
+
+	if dbToken.ExpiresAt.Before(time.Now().UTC()) {
+		expErrJSONResp(http.StatusUnauthorized, w, "session expired")
+		return
+	}
+
+	newToken, err := auth.MakeJWT(dbToken.UserID, cfg.auth, time.Hour)
+	if err != nil {
+		errJSONResp(err, 500, w)
+	}
+
+	validToken := userRsp{
+		Token: newToken,
+	}
+
+	dat, err := json.Marshal(validToken)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, http.StatusOK, w)
+}
+
+func (cfg *apiConfig) handlerRevokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "" || r.Method == http.MethodGet {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errJSONResp(err, 400, w)
+		return
+	}
+
+	dbToken, err := cfg.queries.FetchRefreshToken(r.Context(), refreshToken)
+	if err == sql.ErrNoRows {
+		expErrJSONResp(http.StatusUnauthorized, w, "refresh token not found")
+		return
+	}
+
+	if dbToken.RevokedAt.Valid {
+		expErrJSONResp(204, w, "session expired")
+		return
+	}
+
+	err = cfg.queries.RevokeToken(r.Context(), dbToken.Token)
+	if err != nil {
+		expErrJSONResp(500, w, fmt.Sprintf("%v", err))
+		return
+	}
+	writeJSONResp([]byte{}, 204, w)
 }
 
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
@@ -404,6 +487,9 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
+	mux.HandleFunc("POST /api/refresh", apiCfg.handlerFetchRefreshToken)
+	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevokeRefreshToken)
+
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/api/healthz" {
 			http.NotFound(w, req)
