@@ -186,6 +186,66 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	writeJSONResp(dat, 201, w)
 }
 
+func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "invalid method", http.StatusBadRequest)
+		return
+	}
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errJSONResp(err, 401, w)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.auth)
+	if err != nil {
+		errJSONResp(err, 401, w)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := userReq{}
+
+	err = decoder.Decode(&params)
+	if err != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", err))
+		return
+	}
+
+	hashedPassword, e := auth.HashPassword(params.Password)
+
+	if e != nil {
+		expErrJSONResp(400, w, fmt.Sprintf("%v", e))
+		return
+	}
+
+	arg := database.UpdateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+		ID:             userID,
+	}
+
+	rsp, err := cfg.queries.UpdateUser(r.Context(), arg)
+	if err != nil {
+		http.Error(w, "failed to create user", 500)
+	}
+
+	updatedUser := User{
+		ID:        rsp.ID,
+		CreatedAt: rsp.CreatedAt,
+		UpdatedAt: rsp.UpdatedAt,
+		Email:     rsp.Email,
+	}
+
+	dat, err := json.Marshal(updatedUser)
+	if err != nil {
+		errJSONResp(err, 500, w)
+		return
+	}
+
+	writeJSONResp(dat, http.StatusOK, w)
+}
+
 func (cfg *apiConfig) handlerLoginUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		http.Error(w, "invalid method", http.StatusBadRequest)
@@ -486,6 +546,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLoginUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerFetchRefreshToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevokeRefreshToken)
